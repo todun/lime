@@ -3,6 +3,7 @@ Functions for explaining text classifiers.
 """
 from __future__ import unicode_literals
 
+from functools import partial
 import itertools
 import json
 import re
@@ -82,7 +83,8 @@ class TextDomainMapper(explanation.DomainMapper):
 class IndexedString(object):
     """String with various indexes."""
 
-    def __init__(self, raw_string, split_expression=r'\W+', bow=True):
+    def __init__(self, raw_string, split_expression=r'\W+', bow=True,
+                 mask_string=None):
         """Initializer.
 
         Args:
@@ -93,8 +95,11 @@ class IndexedString(object):
                  will index multiple occurrences of the same word. If False,
                  order matters, so that the same word will have different ids
                  according to position.
+            mask_string: If not None, replace words with this if bow=False
+                if None, default value is UNKWORDZ
         """
         self.raw = raw_string
+        self.mask_string = 'UNKWORDZ' if mask_string is None else mask_string
 
         if callable(split_expression):
             tokens = split_expression(self.raw)
@@ -107,8 +112,9 @@ class IndexedString(object):
         else:
             # with the split_expression as a non-capturing group (?:), we don't need to filter out
             # the separator character from the split results.
-            self.as_list = re.split(r'(%s)|$' % split_expression, self.raw)
-            non_word = re.compile(r'(%s)|$' % split_expression).match
+            splitter = re.compile(r'(%s)|$' % split_expression)
+            self.as_list = [s for s in splitter.split(self.raw) if s]
+            non_word = splitter.match
 
         self.as_np = np.array(self.as_list)
         self.string_start = np.hstack(
@@ -171,8 +177,9 @@ class IndexedString(object):
         mask = np.ones(self.as_np.shape[0], dtype='bool')
         mask[self.__get_idxs(words_to_remove)] = False
         if not self.bow:
-            return ''.join([self.as_list[i] if mask[i]
-                            else 'UNKWORDZ' for i in range(mask.shape[0])])
+            return ''.join(
+                [self.as_list[i] if mask[i] else self.mask_string
+                 for i in range(mask.shape[0])])
         return ''.join([self.as_list[v] for v in mask.nonzero()[0]])
 
     @staticmethod
@@ -207,7 +214,7 @@ class IndexedString(object):
 class IndexedCharacters(object):
     """String with various indexes."""
 
-    def __init__(self, raw_string, bow=True):
+    def __init__(self, raw_string, bow=True, mask_string=None):
         """Initializer.
 
         Args:
@@ -216,10 +223,13 @@ class IndexedCharacters(object):
                  will index multiple occurrences of the same character. If False,
                  order matters, so that the same word will have different ids
                  according to position.
+            mask_string: If not None, replace characters with this if bow=False
+                if None, default value is chr(0)
         """
         self.raw = raw_string
         self.as_list = list(self.raw)
         self.as_np = np.array(self.as_list)
+        self.mask_string = chr(0) if mask_string is None else mask_string
         self.string_start = np.arange(len(self.raw))
         vocab = {}
         self.inverse_vocab = []
@@ -276,8 +286,9 @@ class IndexedCharacters(object):
         mask = np.ones(self.as_np.shape[0], dtype='bool')
         mask[self.__get_idxs(words_to_remove)] = False
         if not self.bow:
-            return ''.join([self.as_list[i] if mask[i]
-                            else chr(0) for i in range(mask.shape[0])])
+            return ''.join(
+                [self.as_list[i] if mask[i] else self.mask_string
+                 for i in range(mask.shape[0])])
         return ''.join([self.as_list[v] for v in mask.nonzero()[0]])
 
     def __get_idxs(self, words):
@@ -296,17 +307,22 @@ class LimeTextExplainer(object):
 
     def __init__(self,
                  kernel_width=25,
+                 kernel=None,
                  verbose=False,
                  class_names=None,
                  feature_selection='auto',
                  split_expression=r'\W+',
                  bow=True,
+                 mask_string=None,
                  random_state=None,
                  char_level=False):
         """Init function.
 
         Args:
-            kernel_width: kernel width for the exponential kernel
+            kernel_width: kernel width for the exponential kernel.
+            kernel: similarity kernel that takes euclidean distances and kernel
+                width as input and outputs weights in (0,1). If None, defaults to
+                an exponential kernel.
             verbose: if true, print local prediction values from linear model
             class_names: list of class names, ordered according to whatever the
                 classifier is using. If not present, class names will be '0',
@@ -318,11 +334,15 @@ class LimeTextExplainer(object):
             split_expression: Regex string or callable. If regex string, will be used with re.split.
                 If callable, the function should return a list of tokens.
             bow: if True (bag of words), will perturb input data by removing
-                all occurrences of individual words.  Explanations will be in
-                terms of these words. Otherwise, will explain in terms of
-                word-positions, so that a word may be important the first time
-                it appears and unimportant the second. Only set to false if the
-                classifier uses word order in some way (bigrams, etc).
+                all occurrences of individual words or characters.
+                Explanations will be in terms of these words. Otherwise, will
+                explain in terms of word-positions, so that a word may be
+                important the first time it appears and unimportant the second.
+                Only set to false if the classifier uses word order in some way
+                (bigrams, etc), or if you set char_level=True.
+            mask_string: String used to mask tokens or characters if bow=False
+                if None, will be 'UNKWORDZ' if char_level=False, chr(0)
+                otherwise.
             random_state: an integer or numpy.RandomState that will be used to
                 generate random numbers. If None, the random state will be
                 initialized using the internal numpy seed.
@@ -330,16 +350,20 @@ class LimeTextExplainer(object):
                 as an independent occurence in the string
         """
 
-        # exponential kernel
-        def kernel(d): return np.sqrt(np.exp(-(d ** 2) / kernel_width ** 2))
+        if kernel is None:
+            def kernel(d, kernel_width):
+                return np.sqrt(np.exp(-(d ** 2) / kernel_width ** 2))
+
+        kernel_fn = partial(kernel, kernel_width=kernel_width)
 
         self.random_state = check_random_state(random_state)
-        self.base = lime_base.LimeBase(kernel, verbose,
+        self.base = lime_base.LimeBase(kernel_fn, verbose,
                                        random_state=self.random_state)
         self.class_names = class_names
         self.vocabulary = None
         self.feature_selection = feature_selection
         self.bow = bow
+        self.mask_string = mask_string
         self.split_expression = split_expression
         self.char_level = char_level
 
@@ -381,9 +405,12 @@ class LimeTextExplainer(object):
             explanations.
         """
 
-        indexed_string = IndexedCharacters(
-            text_instance, bow=self.bow) if self.char_level else IndexedString(
-            text_instance, bow=self.bow, split_expression=self.split_expression)
+        indexed_string = (IndexedCharacters(
+            text_instance, bow=self.bow, mask_string=self.mask_string)
+                          if self.char_level else
+                          IndexedString(text_instance, bow=self.bow,
+                                        split_expression=self.split_expression,
+                                        mask_string=self.mask_string))
         domain_mapper = TextDomainMapper(indexed_string)
         data, yss, distances = self.__data_labels_distances(
             indexed_string, classifier_fn, num_samples,

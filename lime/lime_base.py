@@ -3,6 +3,7 @@ Contains abstract functionality for learning locally linear sparse model.
 """
 from __future__ import print_function
 import numpy as np
+import scipy as sp
 from sklearn.linear_model import Ridge, lars_path
 from sklearn.utils import check_random_state
 
@@ -78,11 +79,40 @@ class LimeBase(object):
             clf = Ridge(alpha=0, fit_intercept=True,
                         random_state=self.random_state)
             clf.fit(data, labels, sample_weight=weights)
-            feature_weights = sorted(zip(range(data.shape[0]),
-                                         clf.coef_ * data[0]),
-                                     key=lambda x: np.abs(x[1]),
-                                     reverse=True)
-            return np.array([x[0] for x in feature_weights[:num_features]])
+
+            coef = clf.coef_
+            if sp.sparse.issparse(data):
+                coef = sp.sparse.csr_matrix(clf.coef_)
+                weighted_data = coef.multiply(data[0])
+                # Note: most efficient to slice the data before reversing
+                sdata = len(weighted_data.data)
+                argsort_data = np.abs(weighted_data.data).argsort()
+                # Edge case where data is more sparse than requested number of feature importances
+                # In that case, we just pad with zero-valued features
+                if sdata < num_features:
+                    nnz_indexes = argsort_data[::-1]
+                    indices = weighted_data.indices[nnz_indexes]
+                    num_to_pad = num_features - sdata
+                    indices = np.concatenate((indices, np.zeros(num_to_pad, dtype=indices.dtype)))
+                    indices_set = set(indices)
+                    pad_counter = 0
+                    for i in range(data.shape[1]):
+                        if i not in indices_set:
+                            indices[pad_counter + sdata] = i
+                            pad_counter += 1
+                            if pad_counter >= num_to_pad:
+                                break
+                else:
+                    nnz_indexes = argsort_data[sdata - num_features:sdata][::-1]
+                    indices = weighted_data.indices[nnz_indexes]
+                return indices
+            else:
+                weighted_data = coef * data[0]
+                feature_weights = sorted(
+                    zip(range(data.shape[1]), weighted_data),
+                    key=lambda x: np.abs(x[1]),
+                    reverse=True)
+                return np.array([x[0] for x in feature_weights[:num_features]])
         elif method == 'lasso_path':
             weighted_data = ((data - np.average(data, axis=0, weights=weights))
                              * np.sqrt(weights[:, np.newaxis]))
@@ -140,12 +170,13 @@ class LimeBase(object):
                 to model_regressor.fit()
 
         Returns:
-            (intercept, exp, score):
+            (intercept, exp, score, local_pred):
             intercept is a float.
             exp is a sorted list of tuples, where each tuple (x,y) corresponds
             to the feature id (x) and the local weight (y). The list is sorted
             by decreasing absolute value of y.
             score is the R^2 value of the returned explanation
+            local_pred is the prediction of the explanation model on the original instance
         """
 
         weights = self.kernel_fn(distances)
@@ -155,7 +186,6 @@ class LimeBase(object):
                                                weights,
                                                num_features,
                                                feature_selection)
-
         if model_regressor is None:
             model_regressor = Ridge(alpha=1, fit_intercept=True,
                                     random_state=self.random_state)

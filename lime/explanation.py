@@ -141,7 +141,7 @@ class Explanation(object):
         """
         label_to_use = label if self.mode == "classification" else self.dummy_label
         ans = self.domain_mapper.map_exp_ids(self.local_exp[label_to_use], **kwargs)
-
+        ans = [(x[0], float(x[1])) for x in ans]
         return ans
 
     def as_map(self):
@@ -267,7 +267,7 @@ class Explanation(object):
                                 .classed('lime predict_proba', true);
             var pp_svg = pp_div.append('svg').style('width', '100%%');
             var pp = new lime.PredictProba(pp_svg, %s, %s);
-            ''' % (jsonize(self.class_names),
+            ''' % (jsonize([str(x) for x in self.class_names]),
                    jsonize(list(self.predict_proba.astype(float))))
 
         predict_value_js = ''
@@ -285,7 +285,7 @@ class Explanation(object):
 
         exp_js = '''var exp_div;
             var exp = new lime.Explanation(%s);
-        ''' % (jsonize(self.class_names))
+        ''' % (jsonize([str(x) for x in self.class_names]))
 
         if self.mode == "classification":
             for label in labels:

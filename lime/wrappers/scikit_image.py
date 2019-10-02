@@ -114,4 +114,4 @@ class SegmentationAlgorithm(BaseWrapper):
             self.set_params(**kwargs)
 
     def __call__(self, *args):
-            return self.target_fn(args[0], **self.target_params)
+        return self.target_fn(args[0], **self.target_params)

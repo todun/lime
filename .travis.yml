@@ -1,18 +1,16 @@
-dist: trusty
+dist: xenial
 sudo: false
 language: python
 cache: pip
 python:
-  - "2.7"
-  - "3.5"
   - "3.6"
+  - "3.7"
 # command to install dependencies
 install:
-  - pip install flake8 numpy scipy
-  - pip install scikit-learn
-  - python setup.py install
+  - python -m pip install -U pip
+  - python -m pip install -e .
+  - python -m pip install flake8 pytest
 # command to run tests
 script:
-  - py.test lime
+  - pytest lime
   - flake8 lime
-

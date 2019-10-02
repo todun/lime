@@ -59,7 +59,7 @@ class TestLimeText(unittest.TestCase):
         explainer = LimeTextExplainer(class_names=class_names)
         idx = 1340
         with self.assertRaises(TypeError):
-            exp = explainer.explain_instance(# noqa:F841
+            exp = explainer.explain_instance(  # noqa:F841
                 newsgroups_test.data[idx], c.predict_proba, num_features=6,
                 labels=[0, 17], model_regressor=Lasso())
 

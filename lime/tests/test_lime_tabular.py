@@ -1,16 +1,18 @@
 import unittest
 
 import numpy as np
-import sklearn # noqa
+import collections
+import sklearn  # noqa
 import sklearn.datasets
 import sklearn.ensemble
-import sklearn.linear_model # noqa
+import sklearn.linear_model  # noqa
 from numpy.testing import assert_array_equal
-from sklearn.datasets import load_iris, make_classification
+from sklearn.datasets import load_iris, make_classification, make_multilabel_classification
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.linear_model import Lasso
 from sklearn.linear_model import LinearRegression
 from lime.discretize import QuartileDiscretizer, DecileDiscretizer, EntropyDiscretizer
+
 
 try:
     from sklearn.model_selection import train_test_split
@@ -89,6 +91,26 @@ class TestLimeTabular(unittest.TestCase):
         rf.fit(X, y)
         instance = np.random.randint(0, X.shape[0])
         feature_names = ["feature" + str(i) for i in range(20)]
+        explainer = LimeTabularExplainer(X,
+                                         feature_names=feature_names,
+                                         discretize_continuous=True)
+
+        exp = explainer.explain_instance(X[instance], rf.predict_proba)
+
+        self.assertIsNotNone(exp)
+        self.assertEqual(10, len(exp.as_list()))
+
+    def test_lime_explainer_sparse_synthetic_data(self):
+        n_features = 20
+        X, y = make_multilabel_classification(n_samples=100,
+                                              sparse=True,
+                                              n_features=n_features,
+                                              n_classes=1,
+                                              n_labels=2)
+        rf = RandomForestClassifier(n_estimators=500)
+        rf.fit(X, y)
+        instance = np.random.randint(0, X.shape[0])
+        feature_names = ["feature" + str(i) for i in range(n_features)]
         explainer = LimeTabularExplainer(X,
                                          feature_names=feature_names,
                                          discretize_continuous=True)
@@ -576,6 +598,72 @@ class TestLimeTabular(unittest.TestCase):
         assert_array_equal(explainer.feature_frequencies[0], np.array([.5, .5]))
         assert_array_equal(explainer.feature_frequencies[1], np.array([.25, .25, .25, .25]))
         assert_array_equal(explainer.feature_frequencies[2], np.array([.5, .5]))
+
+    def test_lime_explainer_with_data_stats(self):
+        np.random.seed(1)
+
+        rf = RandomForestClassifier(n_estimators=500)
+        rf.fit(self.train, self.labels_train)
+        i = np.random.randint(0, self.test.shape[0])
+
+        # Generate stats using a quartile descritizer
+        descritizer = QuartileDiscretizer(self.train, [], self.feature_names, self.target_names,
+                                          random_state=20)
+
+        d_means = descritizer.means
+        d_stds = descritizer.stds
+        d_mins = descritizer.mins
+        d_maxs = descritizer.maxs
+        d_bins = descritizer.bins(self.train, self.target_names)
+
+        # Compute feature values and frequencies of all columns
+        cat_features = np.arange(self.train.shape[1])
+        discretized_training_data = descritizer.discretize(self.train)
+
+        feature_values = {}
+        feature_frequencies = {}
+        for feature in cat_features:
+            column = discretized_training_data[:, feature]
+            feature_count = collections.Counter(column)
+            values, frequencies = map(list, zip(*(feature_count.items())))
+            feature_values[feature] = values
+            feature_frequencies[feature] = frequencies
+
+        # Convert bins to list from array
+        d_bins_revised = {}
+        index = 0
+        for bin in d_bins:
+            d_bins_revised[index] = bin.tolist()
+            index = index+1
+
+        # Descritized stats
+        data_stats = {}
+        data_stats["means"] = d_means
+        data_stats["stds"] = d_stds
+        data_stats["maxs"] = d_maxs
+        data_stats["mins"] = d_mins
+        data_stats["bins"] = d_bins_revised
+        data_stats["feature_values"] = feature_values
+        data_stats["feature_frequencies"] = feature_frequencies
+
+        data = np.zeros((2, len(self.feature_names)))
+        explainer = LimeTabularExplainer(
+            data, feature_names=self.feature_names, random_state=10,
+            training_data_stats=data_stats, training_labels=self.target_names)
+
+        exp = explainer.explain_instance(self.test[i],
+                                         rf.predict_proba,
+                                         num_features=2,
+                                         model_regressor=LinearRegression())
+
+        self.assertIsNotNone(exp)
+        keys = [x[0] for x in exp.as_list()]
+        self.assertEqual(1,
+                         sum([1 if 'petal width' in x else 0 for x in keys]),
+                         "Petal Width is a major feature")
+        self.assertEqual(1,
+                         sum([1 if 'petal length' in x else 0 for x in keys]),
+                         "Petal Length is a major feature")
 
 
 if __name__ == '__main__':

@@ -1,6 +1,7 @@
 # lime
 
 [![Build Status](https://travis-ci.org/marcotcr/lime.svg?branch=master)](https://travis-ci.org/marcotcr/lime)
+[![Binder](https://mybinder.org/badge_logo.svg)](https://mybinder.org/v2/gh/marcotcr/lime/master)
 
 This project is about explaining what machine learning classifiers (or models) are doing.
 At the moment, we support explaining individual predictions for text classifiers or classifiers that act on tables (numpy arrays of numerical or categorical data) or images, with a package called lime (short for local interpretable model-agnostic explanations).
@@ -66,6 +67,7 @@ For image classifiers:
 - [Images - Faces](https://github.com/marcotcr/lime/blob/master/doc/notebooks/Tutorial%20-%20Faces%20and%20GradBoost.ipynb)
 - [Images with keras](https://github.com/marcotcr/lime/blob/master/doc/notebooks/Tutorial%20-%20Image%20Classification%20Keras.ipynb)
 - [MNIST with random forests](https://github.com/marcotcr/lime/blob/master/doc/notebooks/Tutorial%20-%20MNIST%20and%20RF.ipynb)
+- [Images with pytorch](https://github.com/marcotcr/lime/blob/master/doc/notebooks/Tutorial%20-%20images%20-%20Pytorch.ipynb)
 
 For regression:
 - [Simple regression](https://marcotcr.github.io/lime/tutorials/Using%2Blime%2Bfor%2Bregression.html)
@@ -88,10 +90,6 @@ We sample instances around X, and weight them according to their proximity to X 
 We then learn a linear model (dashed line) that approximates the model well in the vicinity of X, but not necessarily globally. For more information, [read our paper](https://arxiv.org/abs/1602.04938), or take a look at [this blog post](https://www.oreilly.com/learning/introduction-to-local-interpretable-model-agnostic-explanations-lime).
 
 <img src="https://raw.githubusercontent.com/marcotcr/lime/master/doc/images/lime.png" width=300px />
-
-## Feedback
-
-If you've tried LIME and are willing to share what went well, and what didn't, please let me know by creating an issue or sending me an email at my github username @gmail.com. I am very interested in understanding when LIME is useful, when it is not, and why.
 
 ## Contributing
 

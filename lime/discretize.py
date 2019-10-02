@@ -4,6 +4,7 @@ Discretizers classes, to be used in lime_tabular
 import numpy as np
 import sklearn
 import sklearn.tree
+import scipy
 from sklearn.utils import check_random_state
 from abc import ABCMeta, abstractmethod
 
@@ -18,7 +19,8 @@ class BaseDiscretizer():
 
     __metaclass__ = ABCMeta  # abstract class
 
-    def __init__(self, data, categorical_features, feature_names, labels=None, random_state=None):
+    def __init__(self, data, categorical_features, feature_names, labels=None, random_state=None,
+                 data_stats=None):
         """Initializer
         Args:
             data: numpy 2d array
@@ -31,9 +33,12 @@ class BaseDiscretizer():
                 column x.
             feature_names: list of names (strings) corresponding to the columns
                 in the training data.
+            data_stats: must have 'means', 'stds', 'mins' and 'maxs', use this
+                if you don't want these values to be computed from data
         """
         self.to_discretize = ([x for x in range(data.shape[1])
-                              if x not in categorical_features])
+                               if x not in categorical_features])
+        self.data_stats = data_stats
         self.names = {}
         self.lambdas = {}
         self.means = {}
@@ -45,6 +50,13 @@ class BaseDiscretizer():
         # To override when implementing a custom binning
         bins = self.bins(data, labels)
         bins = [np.unique(x) for x in bins]
+
+        # Read the stats from data_stats if exists
+        if data_stats:
+            self.means = self.data_stats.get("means")
+            self.stds = self.data_stats.get("stds")
+            self.mins = self.data_stats.get("mins")
+            self.maxs = self.data_stats.get("maxs")
 
         for feature, qts in zip(self.to_discretize, bins):
             n_bins = qts.shape[0]  # Actually number of borders (= #bins-1)
@@ -59,6 +71,10 @@ class BaseDiscretizer():
 
             self.lambdas[feature] = lambda x, qts=qts: np.searchsorted(qts, x)
             discretized = self.lambdas[feature](data[:, feature])
+
+            # If data stats are provided no need to compute the below set of details
+            if data_stats:
+                continue
 
             self.means[feature] = []
             self.stds[feature] = []
@@ -97,24 +113,63 @@ class BaseDiscretizer():
                     ret[:, feature]).astype(int)
         return ret
 
+    def get_undiscretize_values(self, feature, values):
+        mins = np.array(self.mins[feature])[values]
+        maxs = np.array(self.maxs[feature])[values]
+
+        means = np.array(self.means[feature])[values]
+        stds = np.array(self.stds[feature])[values]
+        minz = (mins - means) / stds
+        maxz = (maxs - means) / stds
+        min_max_unequal = (minz != maxz)
+
+        ret = minz
+        ret[np.where(min_max_unequal)] = scipy.stats.truncnorm.rvs(
+            minz[min_max_unequal],
+            maxz[min_max_unequal],
+            loc=means[min_max_unequal],
+            scale=stds[min_max_unequal],
+            random_state=self.random_state
+        )
+        return ret
+
     def undiscretize(self, data):
         ret = data.copy()
         for feature in self.means:
-            mins = self.mins[feature]
-            maxs = self.maxs[feature]
-            means = self.means[feature]
-            stds = self.stds[feature]
-
-            def get_inverse(q):
-                return max(mins[q],
-                           min(self.random_state.normal(means[q], stds[q]), maxs[q]))
             if len(data.shape) == 1:
-                q = int(ret[feature])
-                ret[feature] = get_inverse(q)
+                ret[feature] = self.get_undiscretize_values(
+                    feature, ret[feature].astype(int).reshape(-1, 1)
+                )
             else:
-                ret[:, feature] = (
-                    [get_inverse(int(x)) for x in ret[:, feature]])
+                ret[:, feature] = self.get_undiscretize_values(
+                    feature, ret[:, feature].astype(int)
+                )
         return ret
+
+
+class StatsDiscretizer(BaseDiscretizer):
+    """
+        Class to be used to supply the data stats info when discretize_continuous is true
+    """
+
+    def __init__(self, data, categorical_features, feature_names, labels=None, random_state=None,
+                 data_stats=None):
+
+        BaseDiscretizer.__init__(self, data, categorical_features,
+                                 feature_names, labels=labels,
+                                 random_state=random_state,
+                                 data_stats=data_stats)
+
+    def bins(self, data, labels):
+        bins_from_stats = self.data_stats.get("bins")
+        bins = []
+        if bins_from_stats is not None:
+            for feature in self.to_discretize:
+                bins_from_stats_feature = bins_from_stats.get(feature)
+                if bins_from_stats_feature is not None:
+                    qts = np.array(bins_from_stats_feature)
+                    bins.append(qts)
+        return bins
 
 
 class QuartileDiscretizer(BaseDiscretizer):

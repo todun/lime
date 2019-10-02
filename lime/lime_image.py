@@ -2,12 +2,14 @@
 Functions for explaining classifiers that use Image data.
 """
 import copy
+from functools import partial
 
 import numpy as np
 import sklearn
 import sklearn.preprocessing
 from sklearn.utils import check_random_state
 from skimage.color import gray2rgb
+from progressbar import ProgressBar
 
 from . import lime_base
 from .wrappers.scikit_image import SegmentationAlgorithm
@@ -27,20 +29,22 @@ class ImageExplanation(object):
         self.local_exp = {}
         self.local_pred = None
 
-    def get_image_and_mask(self, label, positive_only=True, hide_rest=False,
+    def get_image_and_mask(self, label, positive_only=True, negative_only=False, hide_rest=False,
                            num_features=5, min_weight=0.):
         """Init function.
 
         Args:
             label: label to explain
-            positive_only: if True, only take superpixels that contribute to
-                the prediction of the label. Otherwise, use the top
-                num_features superpixels, which can be positive or negative
-                towards the label
+            positive_only: if True, only take superpixels that positively contribute to
+                the prediction of the label.
+            negative_only: if True, only take superpixels that negatively contribute to
+                the prediction of the label. If false, and so is positive_only, then both
+                negativey and positively contributions will be taken.
+                Both can't be True at the same time
             hide_rest: if True, make the non-explanation part of the return
                 image gray
             num_features: number of superpixels to include in explanation
-            min_weight: TODO
+            min_weight: minimum weight of the superpixels to include in explanation
 
         Returns:
             (image, mask), where image is a 3d numpy array and mask is a 2d
@@ -49,6 +53,8 @@ class ImageExplanation(object):
         """
         if label not in self.local_exp:
             raise KeyError('Label not in explanation')
+        if positive_only & negative_only:
+            raise ValueError("Positive_only and negative_only cannot be true at the same time.")
         segments = self.segments
         image = self.image
         exp = self.local_exp[label]
@@ -60,6 +66,10 @@ class ImageExplanation(object):
         if positive_only:
             fs = [x[0] for x in exp
                   if x[1] > 0 and x[1] > min_weight][:num_features]
+        if negative_only:
+            fs = [x[0] for x in exp
+                  if x[1] < 0 and abs(x[1]) > min_weight][:num_features]
+        if positive_only or negative_only:
             for f in fs:
                 temp[segments == f] = image[segments == f].copy()
                 mask[segments == f] = 1
@@ -69,13 +79,9 @@ class ImageExplanation(object):
                 if np.abs(w) < min_weight:
                     continue
                 c = 0 if w < 0 else 1
-                mask[segments == f] = 1 if w < 0 else 2
+                mask[segments == f] = -1 if w < 0 else 1
                 temp[segments == f] = image[segments == f].copy()
                 temp[segments == f, c] = np.max(image)
-                for cp in [0, 1, 2]:
-                    if c == cp:
-                        continue
-                    # temp[segments == f, cp] *= 0.5
             return temp, mask
 
 
@@ -88,13 +94,16 @@ class LimeImageExplainer(object):
     feature that is 1 when the value is the same as the instance being
     explained."""
 
-    def __init__(self, kernel_width=.25, verbose=False,
+    def __init__(self, kernel_width=.25, kernel=None, verbose=False,
                  feature_selection='auto', random_state=None):
         """Init function.
 
         Args:
             kernel_width: kernel width for the exponential kernel.
-            If None, defaults to sqrt(number of columns) * 0.75
+            If None, defaults to sqrt(number of columns) * 0.75.
+            kernel: similarity kernel that takes euclidean distances and kernel
+                width as input and outputs weights in (0,1). If None, defaults to
+                an exponential kernel.
             verbose: if true, print local prediction values from linear model
             feature_selection: feature selection method. can be
                 'forward_selection', 'lasso_path', 'none' or 'auto'.
@@ -106,12 +115,15 @@ class LimeImageExplainer(object):
         """
         kernel_width = float(kernel_width)
 
-        def kernel(d):
-            return np.sqrt(np.exp(-(d ** 2) / kernel_width ** 2))
+        if kernel is None:
+            def kernel(d, kernel_width):
+                return np.sqrt(np.exp(-(d ** 2) / kernel_width ** 2))
+
+        kernel_fn = partial(kernel, kernel_width=kernel_width)
 
         self.random_state = check_random_state(random_state)
         self.feature_selection = feature_selection
-        self.base = lime_base.LimeBase(kernel, verbose, random_state=self.random_state)
+        self.base = lime_base.LimeBase(kernel_fn, verbose, random_state=self.random_state)
 
     def explain_instance(self, image, classifier_fn, labels=(1,),
                          hide_color=None,
@@ -153,7 +165,7 @@ class LimeImageExplainer(object):
                 will be generated using the internal random number generator.
 
         Returns:
-            An Explanation object (see explanation.py) with the corresponding
+            An ImageExplanation object (see lime_image.py) with the corresponding
             explanations.
         """
         if len(image.shape) == 2:
@@ -236,6 +248,8 @@ class LimeImageExplainer(object):
         labels = []
         data[0, :] = 1
         imgs = []
+        pbar = ProgressBar(num_samples)
+        pbar.start()
         for row in data:
             temp = copy.deepcopy(image)
             zeros = np.where(row == 0)[0]
@@ -248,6 +262,9 @@ class LimeImageExplainer(object):
                 preds = classifier_fn(np.array(imgs))
                 labels.extend(preds)
                 imgs = []
+            pbar.currval += 1
+            pbar.update()
+        pbar.finish()
         if len(imgs) > 0:
             preds = classifier_fn(np.array(imgs))
             labels.extend(preds)
